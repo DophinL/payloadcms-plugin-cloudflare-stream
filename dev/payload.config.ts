@@ -2,7 +2,7 @@ import { mongooseAdapter } from '@payloadcms/db-mongodb'
 import { lexicalEditor } from '@payloadcms/richtext-lexical'
 import path from 'path'
 import { buildConfig } from 'payload'
-import { cloudflareStreamPlugin } from 'cloudflare-stream-plugin'
+import { cloudflareStreamPlugin } from 'payloadcms-plugin-cloudflare-stream'
 import sharp from 'sharp'
 import { fileURLToPath } from 'url'
 

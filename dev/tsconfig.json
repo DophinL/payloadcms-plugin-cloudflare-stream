@@ -16,20 +16,12 @@
   "compilerOptions": {
     "baseUrl": "./",
     "paths": {
-      "@payload-config": [
-        "./payload.config.ts"
-      ],
-      "cloudflare-stream-plugin": [
-        "../src/index.ts"
-      ],
-      "cloudflare-stream-plugin/client": [
-        "../src/exports/client.ts"
-      ],
-      "cloudflare-stream-plugin/rsc": [
-        "../src/exports/rsc.ts"
-      ]
+      "@payload-config": ["./payload.config.ts"],
+      "payloadcms-plugin-cloudflare-stream": ["../src/index.ts"],
+      "payloadcms-plugin-cloudflare-stream/client": ["../src/exports/client.ts"],
+      "payloadcms-plugin-cloudflare-stream/rsc": ["../src/exports/rsc.ts"]
     },
     "noEmit": true,
-    "emitDeclarationOnly": false,
+    "emitDeclarationOnly": false
   }
 }

@@ -1,30 +1,32 @@
 {
-  "name": "cloudflare-stream-plugin",
-  "version": "1.0.0",
-  "description": "A blank template to get started with Payload 3.0",
+  "name": "payloadcms-plugin-cloudflare-stream",
+  "version": "1.0.4",
+  "description": "A Cloudflare Stream plugin for PayloadCMS with client upload support",
   "license": "MIT",
   "type": "module",
   "exports": {
     ".": {
-      "import": "./src/index.ts",
-      "types": "./src/index.ts",
-      "default": "./src/index.ts"
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
     },
     "./client": {
-      "import": "./src/exports/client.ts",
-      "types": "./src/exports/client.ts",
-      "default": "./src/exports/client.ts"
+      "import": "./dist/exports/client.js",
+      "types": "./dist/exports/client.d.ts",
+      "default": "./dist/exports/client.js"
     },
     "./rsc": {
-      "import": "./src/exports/rsc.ts",
-      "types": "./src/exports/rsc.ts",
-      "default": "./src/exports/rsc.ts"
+      "import": "./dist/exports/rsc.js",
+      "types": "./dist/exports/rsc.d.ts",
+      "default": "./dist/exports/rsc.js"
     }
   },
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "*.js",
+    "*.d.ts"
   ],
   "scripts": {
     "build": "pnpm copyfiles && pnpm build:types && pnpm build:swc",
@@ -48,6 +50,7 @@
     "@payloadcms/db-sqlite": "3.29.0",
     "@payloadcms/eslint-config": "3.9.0",
     "@payloadcms/next": "3.29.0",
+    "@payloadcms/plugin-cloud-storage": "3.29.0",
     "@payloadcms/richtext-lexical": "3.29.0",
     "@payloadcms/ui": "3.29.0",
     "@swc-node/register": "1.10.9",
@@ -76,8 +79,12 @@
     "sort-package-json": "^2.10.0",
     "typescript": "5.7.3"
   },
+  "dependencies": {
+    "@payloadcms/plugin-cloud-storage": "^3.29.0"
+  },
   "peerDependencies": {
-    "payload": "^3.29.0"
+    "payload": "^3.29.0",
+    "@payloadcms/plugin-cloud-storage": "^3.29.0"
   },
   "engines": {
     "node": "^18.20.2 || >=20.9.0",

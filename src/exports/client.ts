@@ -1,1 +1,1 @@
-export { BeforeDashboardClient } from '../components/BeforeDashboardClient.js'
+export { CloudflareClientUploadHandler } from '../components/CloudflareClientUploadHandler.js'
