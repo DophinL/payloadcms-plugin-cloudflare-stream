@@ -1,125 +1,8 @@
 import type { CollectionConfig, PayloadRequest } from 'payload'
-import type {
-  CloudflareStreamPluginOptions,
-  File,
-  HandleStreamDelete,
-  HandleStreamUpload,
-  VideoStatus,
-} from './types.js'
+import type { CloudflareStreamPluginOptions, File, HandleStreamDelete, VideoStatus } from './types'
+import { poll } from './utils'
 
 const API_BASE = 'https://api.cloudflare.com/client/v4/accounts'
-
-/**
- * 上传视频到 Cloudflare Stream
- */
-export const handleStreamUpload: HandleStreamUpload = async ({
-  collection,
-  data,
-  file,
-  req,
-  options,
-}) => {
-  try {
-    const { debug = false, videoOptions = {} } = options
-
-    // 获取 Cloudflare 凭证
-    const accountId = options.accountId || process.env.CLOUDFLARE_ACCOUNT_ID
-    const apiToken = options.apiToken || process.env.CLOUDFLARE_API_TOKEN
-
-    if (!accountId || !apiToken) {
-      throw new Error('缺少 Cloudflare 凭证，请提供 accountId 和 apiToken')
-    }
-
-    // 准备 Buffer
-    let buffer: Buffer
-    if (file.buffer) {
-      buffer = file.buffer
-    } else if (file.tempFilePath) {
-      const fs = await import('fs')
-      buffer = fs.readFileSync(file.tempFilePath)
-    } else {
-      throw new Error('无法获取文件内容')
-    }
-
-    // 准备上传参数
-    const uploadParams: Record<string, any> = {
-      allowedOrigins: ['*'],
-      requireSignedURLs: videoOptions.requireSignedURLs || false,
-    }
-
-    if (videoOptions.maxDurationSeconds) {
-      uploadParams.maxDurationSeconds = videoOptions.maxDurationSeconds
-    }
-
-    if (videoOptions.allowDownload !== undefined) {
-      uploadParams.allowDownload = videoOptions.allowDownload
-    }
-
-    if (videoOptions.watermark) {
-      uploadParams.watermark = videoOptions.watermark
-    }
-
-    // 发送请求到 Cloudflare API
-    const response = await fetch(`${API_BASE}/${accountId}/stream`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiToken}`,
-      },
-      // 使用 FormData 发送文件
-      body: (() => {
-        const formData = new FormData()
-        formData.append('file', new Blob([buffer], { type: file.mimeType }), file.filename)
-
-        // 添加上传参数
-        Object.entries(uploadParams).forEach(([key, value]) => {
-          formData.append(key, typeof value === 'object' ? JSON.stringify(value) : String(value))
-        })
-
-        return formData
-      })(),
-    })
-
-    if (!response.ok) {
-      const errorData = await response.json()
-      if (debug) {
-        console.error('Cloudflare Stream 上传失败:', errorData)
-      }
-      throw new Error(`上传到 Cloudflare Stream 失败: ${response.status} ${response.statusText}`)
-    }
-
-    const result = await response.json()
-
-    if (!result.success) {
-      if (debug) {
-        console.error('Cloudflare Stream 上传失败:', result)
-      }
-      throw new Error(
-        `上传到 Cloudflare Stream 失败: ${result.errors?.map((e: { message: string }) => e.message).join(', ')}`,
-      )
-    }
-
-    const streamId = result.result.uid
-    const streamUrl = result.result.playback.hls
-    const size = result.result.size || file.filesize
-    const duration = result.result.duration || 0
-    const thumbnailUrl = result.result.thumbnail || ''
-    const status: VideoStatus =
-      result.result.status.state === 'ready'
-        ? 'ready'
-        : result.result.status.state === 'error'
-          ? 'error'
-          : 'processing'
-
-    if (debug) {
-      console.log('视频已成功上传到 Cloudflare Stream:', result.result)
-    }
-
-    return { streamId, streamUrl, size, duration, thumbnailUrl, status }
-  } catch (error) {
-    console.error(`上传视频到 Cloudflare Stream 时出错:`, error)
-    throw error
-  }
-}
 
 /**
  * 从 Cloudflare Stream 删除视频
@@ -184,13 +67,16 @@ export const handleStreamDelete: HandleStreamDelete = async ({
 
 /**
  * 检查视频状态
+ * @param options.waitUntilReady 是否等待视频处理完成
  */
 export const checkVideoStatus = async ({
   streamId,
   options,
+  waitUntilReady = false,
 }: {
   streamId: string
   options: CloudflareStreamPluginOptions
+  waitUntilReady?: boolean
 }): Promise<{
   status: VideoStatus
   duration?: number
@@ -207,7 +93,12 @@ export const checkVideoStatus = async ({
     throw new Error('缺少 Cloudflare 凭证，请提供 accountId 和 apiToken')
   }
 
-  try {
+  const fetchVideoStatus = async (): Promise<{
+    status: VideoStatus
+    duration?: number
+    thumbnailUrl?: string
+    size?: number
+  }> => {
     // 获取视频信息
     const response = await fetch(`${API_BASE}/${accountId}/stream/${streamId}`, {
       method: 'GET',
@@ -238,19 +129,155 @@ export const checkVideoStatus = async ({
     const videoData = result.result
 
     // 返回视频状态和信息
+    const status: VideoStatus =
+      videoData.status.state === 'ready'
+        ? 'ready'
+        : videoData.status.state === 'error'
+          ? 'error'
+          : 'processing'
+
     return {
-      status:
-        videoData.status.state === 'ready'
-          ? 'ready'
-          : videoData.status.state === 'error'
-            ? 'error'
-            : 'processing',
+      status,
       duration: videoData.duration || undefined,
       thumbnailUrl: videoData.thumbnail || undefined,
       size: videoData.size || undefined,
     }
+  }
+
+  try {
+    // 如果不需要等待视频处理完成，直接返回当前状态
+    if (!waitUntilReady) {
+      return await fetchVideoStatus()
+    }
+
+    // 使用轮询等待视频处理完成
+    return await poll(
+      async () => {
+        const status = await fetchVideoStatus()
+
+        if (status.status === 'ready') {
+          return { success: true, result: status }
+        } else if (status.status === 'error') {
+          throw new Error('视频处理失败')
+        }
+
+        // 继续轮询
+        return { success: false, result: status }
+      },
+      {
+        interval: 5000,
+        maxAttempts: 12,
+        onProgress: (attempt, maxAttempts) => {
+          if (debug) {
+            console.log(`等待视频处理完成，尝试次数: ${attempt}/${maxAttempts}`)
+          }
+        },
+      },
+    )
   } catch (error) {
     console.error(`检查视频状态时出错:`, error)
+    throw error
+  }
+}
+
+/**
+ * 获取 cloudflare stream 的下载 url
+ * 先检查视频状态，确保为 ready 状态后再生成下载链接
+ * @param param0
+ */
+export const genAndGetDownloadUrl = async ({
+  streamId,
+  options,
+}: {
+  streamId: string
+  options: CloudflareStreamPluginOptions
+}): Promise<string> => {
+  const { debug = false } = options
+
+  // 获取 Cloudflare 凭证
+  const accountId = options.accountId || process.env.CLOUDFLARE_ACCOUNT_ID
+  const apiToken = options.apiToken || process.env.CLOUDFLARE_API_TOKEN
+
+  if (!accountId || !apiToken) {
+    throw new Error('缺少 Cloudflare 凭证，请提供 accountId 和 apiToken')
+  }
+
+  try {
+    // 先检查视频状态，waitUntilReady 设为 true 表示等待视频处理完成
+    const videoStatus = await checkVideoStatus({ streamId, options, waitUntilReady: true })
+
+    if (debug) {
+      console.log('视频状态检查通过，开始生成下载链接', streamId)
+    }
+
+    // 调用 POST 请求创建下载链接
+    const postResponse = await fetch(`${API_BASE}/${accountId}/stream/${streamId}/downloads`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+        'Content-Type': 'application/json',
+      },
+    })
+
+    if (!postResponse.ok) {
+      if (debug) {
+        console.error(`创建下载链接失败: ${postResponse.status} ${postResponse.statusText}`)
+      }
+      throw new Error(`创建下载链接失败: ${postResponse.status} ${postResponse.statusText}`)
+    }
+
+    const postResult = await postResponse.json()
+
+    if (!postResult.success) {
+      if (debug) {
+        console.error('创建下载链接失败:', postResult)
+      }
+      throw new Error(
+        `创建下载链接失败: ${postResult.errors?.map((e: { message: string }) => e.message).join(', ')}`,
+      )
+    }
+
+    // 检查是否已经准备好
+    if (postResult.result.default.status === 'ready') {
+      return postResult.result.default.url
+    }
+
+    // 使用 poll 函数轮询下载状态
+    return await poll<string>(
+      async () => {
+        const getResponse = await fetch(`${API_BASE}/${accountId}/stream/${streamId}/downloads`, {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${apiToken}`,
+            'Content-Type': 'application/json',
+          },
+        })
+
+        if (!getResponse.ok) {
+          return { success: false, result: '' }
+        }
+
+        const getResult = await getResponse.json()
+
+        if (getResult.success && getResult.result.default.status === 'ready') {
+          return { success: true, result: getResult.result.default.url }
+        }
+
+        // 未就绪，返回失败
+        return { success: false, result: '' }
+      },
+      {
+        interval: 5000,
+        maxAttempts: 12,
+        onProgress: (attempt, maxAttempts) => {
+          if (debug) {
+            console.log(`检查下载链接状态中，尝试次数: ${attempt}/${maxAttempts}`)
+          }
+        },
+      },
+    )
+  } catch (error) {
+    console.error('获取下载链接时出错:', error)
     throw error
   }
 }

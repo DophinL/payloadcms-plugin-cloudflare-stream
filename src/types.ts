@@ -118,21 +118,6 @@ export interface CloudflareStreamPluginOptions {
   }
 }
 
-export type HandleStreamUpload = (args: {
-  collection: CollectionConfig
-  data: any
-  file: File
-  req: PayloadRequest
-  options: CloudflareStreamPluginOptions
-}) => Promise<{
-  streamId: string
-  streamUrl: string
-  size: number
-  duration: number
-  thumbnailUrl: string
-  status: VideoStatus
-}>
-
 export type HandleStreamDelete = (args: {
   collection: CollectionConfig
   doc: any

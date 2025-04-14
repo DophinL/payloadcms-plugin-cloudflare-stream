@@ -24,7 +24,7 @@ import type {
 import { cloudStoragePlugin } from '@payloadcms/plugin-cloud-storage'
 import { initClientUploads } from '@payloadcms/plugin-cloud-storage/utilities'
 
-import { checkVideoStatus, handleStreamDelete, handleStreamUpload } from './handlers'
+import { checkVideoStatus, genAndGetDownloadUrl, handleStreamDelete } from './handlers'
 import type { CloudflareStreamPluginOptions, VideoStatus, File } from './types'
 import { getGenerateSignedURLHandler } from './generateSignedURL'
 
@@ -44,6 +44,7 @@ interface CloudflareStreamFileData extends FileData {
     size?: number
     duration?: number
     thumbnailUrl?: string
+    downloadUrl?: string
   }
 }
 
@@ -203,6 +204,14 @@ const createStreamFields = (): Field[] => [
           },
         },
       },
+      {
+        name: 'downloadUrl',
+        label: '下载 URL',
+        type: 'text',
+        admin: {
+          readOnly: true,
+        },
+      },
     ],
   },
 ]
@@ -224,6 +233,8 @@ function cloudflareStreamAdapter(getOptions: () => CloudflareStreamPluginOptions
 
       // 处理上传
       handleUpload: (async ({ data, file, clientUploadContext }) => {
+        debugger
+        console.log('handleUpload', data, file, clientUploadContext)
         const options = getOptions()
         const { accountId, apiToken, debug } = options
 
@@ -269,6 +280,11 @@ function cloudflareStreamAdapter(getOptions: () => CloudflareStreamPluginOptions
                 ? 'error'
                 : 'processing'
 
+          const videoUrl = await genAndGetDownloadUrl({
+            streamId,
+            options,
+          })
+
           // 更新 data.cloudflareStream 字段
           data.cloudflareStream = {
             streamId: streamId,
@@ -280,6 +296,7 @@ function cloudflareStreamAdapter(getOptions: () => CloudflareStreamPluginOptions
             size: videoData.size,
             duration: videoData.duration,
             thumbnailUrl: videoData.thumbnail,
+            downloadUrl: videoUrl,
           }
 
           if (options.afterUpload) {
@@ -312,151 +329,189 @@ function cloudflareStreamAdapter(getOptions: () => CloudflareStreamPluginOptions
       }) as HandleUpload,
 
       // 处理删除
-      handleDelete: (async ({ doc }) => {
+      // 如果写了删除逻辑，会导致 streamId 丢失，后续无法正常更新
+      handleDelete: (async ({ doc, req }) => {
+        console.log('handleDelete with no action', doc, req)
+        // debugger
+        // const options = getOptions()
+
+        // try {
+        //   const fileData = doc as CloudflareStreamFileData
+        //   const streamId = fileData.cloudflareStream?.streamId
+
+        //   if (!streamId) {
+        //     if (options.debug) {
+        //       console.warn(`删除操作: 文档没有关联的 streamId`)
+        //     }
+        //     return
+        //   }
+
+        //   // 删除 Cloudflare Stream 视频
+        //   await handleStreamDelete({
+        //     collection,
+        //     doc,
+        //     req: {} as PayloadRequest,
+        //     streamId,
+        //     options,
+        //   })
+
+        //   if (options.debug) {
+        //     console.log('视频已从 Cloudflare Stream 成功删除:', streamId)
+        //   }
+        // } catch (error) {
+        //   console.error(`从 Cloudflare Stream 删除视频时出错:`, error)
+        // }
+      }) as HandleDelete,
+
+      // 静态文件处理器
+      staticHandler: (async (req, { params, doc }) => {
+        console.log('staticHandler', req, params, doc)
+
+        debugger
         const options = getOptions()
-
         try {
-          const fileData = doc as CloudflareStreamFileData
-          const streamId = fileData.cloudflareStream?.streamId
+          // 从参数中获取文件名和集合名称
+          const { collection: collectionSlug, filename, clientUploadContext } = params
 
-          if (!streamId) {
-            if (options.debug) {
-              console.warn(`删除操作: 文档没有关联的 streamId`)
-            }
-            return
+          if (!collectionSlug || !filename) {
+            return new Response('必须提供集合和文件名', { status: 400 })
           }
 
-          // 删除 Cloudflare Stream 视频
-          await handleStreamDelete({
-            collection,
-            doc,
-            req: {} as PayloadRequest,
+          let streamId: string | undefined
+
+          // 首先尝试从doc中获取streamId (安全类型检查)
+
+          // 如果doc中没有，但有clientUploadContext，从中获取streamId
+          if (
+            clientUploadContext &&
+            (clientUploadContext as CloudflareStreamClientUploadContext).streamId
+          ) {
+            streamId = (clientUploadContext as CloudflareStreamClientUploadContext).streamId
+          }
+          // 否则尝试从文件名中提取ID，然后查询文档
+          else {
+            // 从数据库查询文档
+            if (doc) {
+              const fetchedDoc = await req.payload.findByID({
+                collection: collectionSlug as CollectionSlug,
+                id: doc.id,
+              })
+
+              if (fetchedDoc) {
+                // 安全检查获取streamId
+                const fetchedFileData = fetchedDoc as any
+                if (fetchedFileData?.cloudflareStream?.streamId) {
+                  streamId = fetchedFileData.cloudflareStream.streamId
+                }
+              }
+            }
+          }
+
+          if (!streamId) {
+            return new Response('找不到视频ID', { status: 404 })
+          }
+
+          // 首先获取下载链接
+          let videoUrl = await genAndGetDownloadUrl({
             streamId,
             options,
           })
 
-          if (options.debug) {
-            console.log('视频已从 Cloudflare Stream 成功删除:', streamId)
+          // 检查请求头中是否有ETag
+          const etagFromHeaders = req.headers.get('etag') || req.headers.get('if-none-match')
+
+          // 获取视频内容
+          try {
+            // 准备请求头
+            const requestHeaders = new Headers()
+            if (etagFromHeaders) {
+              requestHeaders.set('If-None-Match', etagFromHeaders)
+            }
+
+            const videoResponse = await fetch(videoUrl, {
+              headers: requestHeaders,
+            })
+
+            console.log(
+              'videoResponse!!!',
+              videoResponse.ok,
+              videoResponse.status,
+              videoResponse.statusText,
+            )
+
+            // 如果返回304 Not Modified，直接返回相同状态
+            if (videoResponse.status === 304) {
+              return new Response(null, {
+                status: 304,
+                headers: new Headers({
+                  'Content-Type': videoResponse.headers.get('Content-Type') || 'video/mp4',
+                  ETag: videoResponse.headers.get('ETag') || '',
+                  'Cache-Control': 'max-age=3600',
+                }),
+              })
+            }
+
+            if (!videoResponse.ok) {
+              if (options.debug) {
+                console.error(`获取视频失败: ${videoResponse.status} ${videoResponse.statusText}`)
+              }
+              return new Response('无法获取视频内容', { status: videoResponse.status })
+            }
+
+            // 获取视频内容
+            const videoBuffer = await videoResponse.arrayBuffer()
+
+            // 设置响应头
+            const headers = new Headers()
+            headers.set('Content-Type', videoResponse.headers.get('Content-Type') || 'video/mp4')
+            headers.set('Cache-Control', 'max-age=3600')
+
+            // 复制重要的头信息
+            const headersToForward = [
+              'Content-Length',
+              'ETag',
+              'Last-Modified',
+              'Accept-Ranges',
+              'Content-Disposition',
+            ]
+
+            for (const header of headersToForward) {
+              if (videoResponse.headers.has(header)) {
+                headers.set(header, videoResponse.headers.get(header)!)
+              }
+            }
+
+            console.log('headers!!!', headers)
+
+            // 返回视频内容
+            return new Response(videoBuffer, {
+              status: 200,
+              headers,
+            })
+          } catch (fetchError) {
+            if (options.debug) {
+              console.error('获取视频内容失败:', fetchError)
+            }
+            // 如果获取失败，重定向到视频URL
+            return Response.redirect(videoUrl, 302)
           }
         } catch (error) {
-          console.error(`从 Cloudflare Stream 删除视频时出错:`, error)
+          if (options.debug) {
+            console.error('处理视频请求出错:', error)
+          }
+          return new Response('服务器内部错误', { status: 500 })
         }
-      }) as HandleDelete,
-
-      // 静态文件处理器
-      staticHandler: (async (req, { params }) => {
-        const fakeMP4Content = new Uint8Array([
-          0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32, 0x00, 0x00, 0x00,
-          0x00, 0x6d, 0x70, 0x34, 0x32, 0x69, 0x73, 0x6f, 0x6d, 0x00, 0x00, 0x00, 0x08, 0x66, 0x72,
-          0x65, 0x65, 0x00, 0x00, 0x00, 0x08, 0x6d, 0x64, 0x61, 0x74, 0x00, 0x00, 0x00, 0x00,
-        ])
-
-        // 返回伪造的MP4视频流，设置正确的 MIME 类型
-        return new Response(fakeMP4Content, {
-          status: 200,
-          headers: {
-            'Content-Type': 'video/mp4',
-            'Cache-Control': 'max-age=3600',
-          },
-        })
-
-        // const options = getOptions()
-        // const streamDomain = options.streamDomain
-        // try {
-        //   // 从文档获取视频URL
-        //   const { clientUploadContext } = params
-        //   const { streamId } = clientUploadContext as { streamId: string }
-        //   // 使用类型断言获取 collectionSlug
-        //   const collectionSlug = params?.collection
-
-        //   if (!collectionSlug) {
-        //     return new Response('Collection not found', { status: 404 })
-        //   }
-
-        //   // 从 Cloudflare Stream 获取视频内容
-        //   const streamUrl = `${streamDomain}/${streamId}/manifest/video.mp4`
-
-        //   console.log('streamUrl', streamUrl)
-
-        //   try {
-        //     // 获取视频内容
-        //     const videoResponse = await fetch(streamUrl)
-
-        //     if (!videoResponse.ok) {
-        //       console.error(
-        //         `无法从 Cloudflare Stream 获取视频: ${videoResponse.status} ${videoResponse.statusText}`,
-        //       )
-        //       // 伪造一个简单的 MP4 视频内容
-        //       // 创建一个最小的MP4文件二进制数据
-        //       const fakeMP4Content = new Uint8Array([
-        //         0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32, 0x00, 0x00,
-        //         0x00, 0x00, 0x6d, 0x70, 0x34, 0x32, 0x69, 0x73, 0x6f, 0x6d, 0x00, 0x00, 0x00, 0x08,
-        //         0x66, 0x72, 0x65, 0x65, 0x00, 0x00, 0x00, 0x08, 0x6d, 0x64, 0x61, 0x74, 0x00, 0x00,
-        //         0x00, 0x00,
-        //       ])
-
-        //       // 返回伪造的MP4视频流，设置正确的 MIME 类型
-        //       return new Response(fakeMP4Content, {
-        //         status: 200,
-        //         headers: {
-        //           'Content-Type': 'video/mp4',
-        //           'Cache-Control': 'max-age=3600',
-        //         },
-        //       })
-        //     }
-
-        //     // 获取内容类型和其他头信息
-        //     const headers = new Headers()
-
-        //     // 设置内容类型，保证返回的是视频类型而不是文本
-        //     // 根据 Cloudflare Stream 返回的是MP4流，设置合适的 MIME 类型
-        //     headers.set('Content-Type', 'video/mp4')
-
-        //     // 缓存控制
-        //     headers.set('Cache-Control', 'max-age=3600')
-
-        //     // 从 Cloudflare 响应中复制其他相关的头信息
-        //     if (videoResponse.headers.has('Content-Length')) {
-        //       headers.set('Content-Length', videoResponse.headers.get('Content-Length')!)
-        //     }
-
-        //     if (videoResponse.headers.has('ETag')) {
-        //       headers.set('ETag', videoResponse.headers.get('ETag')!)
-        //     }
-
-        //     // 获取响应体作为 arrayBuffer
-        //     const videoBuffer = await videoResponse.arrayBuffer()
-
-        //     // 返回视频内容，使用正确的 headers
-        //     return new Response(videoBuffer, {
-        //       status: 200,
-        //       headers,
-        //     })
-        //   } catch (fetchError) {
-        //     console.error('获取 Cloudflare Stream 视频时出错:', fetchError)
-
-        //     // 如果获取失败，作为备选方案使用重定向
-        //     if (options.debug) {
-        //       console.log('使用重定向作为备选方案:', streamUrl)
-        //     }
-
-        //     // 设置视频 MIME 类型的 headers
-        //     const redirectHeaders = new Headers()
-        //     redirectHeaders.set('Content-Type', 'video/mp4')
-
-        //     return Response.redirect(streamUrl, 302)
-        //   }
-        // } catch (error) {
-        //   console.error('Error serving Cloudflare Stream video:', error)
-        //   return new Response('Internal Server Error', { status: 500 })
-        // }
       }) as StaticHandler,
 
-      // 生成 URL
+      // 生成 URL，务必返回原始视频，否则在更新时会报错
       generateURL: ({ filename, data, collection }) => {
         // 获取插件选项
         const options = getOptions()
         const streamDomain = options.streamDomain
+
+        if (data.cloudflareStream?.downloadUrl) {
+          return data.cloudflareStream.downloadUrl
+        }
 
         // 如果提供了 streamDomain 并且 data 中包含 cloudflareStream 数据
         if (streamDomain && data && data.cloudflareStream?.streamId) {
