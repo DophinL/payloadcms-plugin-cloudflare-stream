@@ -40,6 +40,13 @@ export interface CloudflareStreamPluginOptions {
   apiToken?: string
 
   /**
+   * Cloudflare Stream 域名
+   * 用于生成视频观看 URL
+   * 例如: https://customer-domain.cloudflarestream.com
+   */
+  streamDomain?: string
+
+  /**
    * 需要使用 Cloudflare Stream 的集合名称
    * @default []
    */
