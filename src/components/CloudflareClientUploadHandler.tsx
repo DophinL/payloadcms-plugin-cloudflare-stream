@@ -42,6 +42,7 @@ export const CloudflareClientUploadHandler = createClientUploadHandler<HandlerEx
 
     const showSuccessToast = (message: string, description?: string) => {
       toastId = toast.success(message, {
+        duration: 3000,
         description: description ?? describeUpload(),
         id: toastId,
       })
@@ -50,6 +51,7 @@ export const CloudflareClientUploadHandler = createClientUploadHandler<HandlerEx
 
     const showErrorToast = (message: string, description?: string) => {
       toastId = toast.error(message, {
+        duration: 3000,
         description,
         id: toastId,
       })
