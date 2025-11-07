@@ -25,7 +25,12 @@ import { cloudStoragePlugin } from '@payloadcms/plugin-cloud-storage'
 import { initClientUploads } from '@payloadcms/plugin-cloud-storage/utilities'
 
 import { checkVideoStatus, genAndGetDownloadUrl, handleStreamDelete } from './handlers'
-import type { CloudflareStreamPluginOptions, VideoStatus, File } from './types'
+import type {
+  CloudflareStreamPluginOptions,
+  VideoStatus,
+  File,
+  ClientUploadCallbacks,
+} from './types'
 import { getGenerateSignedURLHandler } from './generateSignedURL'
 
 // 客户端上传上下文类型定义
@@ -110,6 +115,11 @@ export type CloudflareStreamPluginConfig = {
    * @default false
    */
   enableClientUploads?: boolean
+
+  /**
+   * 客户端上传阶段的回调
+   */
+  clientCallbacks?: ClientUploadCallbacks
 
   /**
    * 是否禁用本地存储
@@ -677,6 +687,9 @@ export const cloudflareStreamPlugin = (pluginOptions: CloudflareStreamPluginConf
         collections,
         config,
         enabled: true,
+        extraClientHandlerProps: () => ({
+          callbacks: pluginOptions.clientCallbacks,
+        }),
         serverHandler: getGenerateSignedURLHandler({
           access:
             typeof pluginOptions.clientUploads === 'object'
@@ -723,3 +736,12 @@ export const cloudflareStreamPlugin = (pluginOptions: CloudflareStreamPluginConf
     })(config)
   }
 }
+
+export type {
+  ClientUploadCallbacks,
+  ClientUploadErrorArgs,
+  ClientUploadErrorStage,
+  ClientUploadProgressArgs,
+  ClientUploadSuccessArgs,
+  UploadType,
+} from './types'

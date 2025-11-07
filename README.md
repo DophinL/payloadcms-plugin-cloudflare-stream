@@ -118,6 +118,11 @@ type CloudflareStreamPluginConfig = {
   enableClientUploads?: boolean
 
   /**
+   * Client-side upload lifecycle callbacks
+   */
+  clientCallbacks?: ClientUploadCallbacks
+
+  /**
    * Disable local storage
    * @default true
    */
@@ -140,6 +145,34 @@ cloudflareStreamPlugin({
     access: ({ req }) => true, // Control who can generate upload URLs
   },
 })
+
+### Client Upload Callbacks
+
+Hook into the browser upload lifecycle (requires `enableClientUploads: true`):
+
+```typescript
+cloudflareStreamPlugin({
+  // Basic config...
+  enableClientUploads: true,
+  clientCallbacks: {
+    onProgress: ({ percentage, file }) => {
+      toast.loading(`正在上传 ${file.name} (${percentage.toFixed(1)}%)`)
+    },
+    onSuccess: ({ streamId, uploadType }) => {
+      toast.success(`视频 ${streamId} 上传完成，方式：${uploadType}`)
+    },
+    onError: ({ error, stage }) => {
+      toast.error(`上传失败（阶段：${stage}）：${error.message}`)
+    },
+  },
+})
+```
+
+The callbacks receive the following payloads:
+
+- `onProgress`: `{ collectionSlug, file, uploadType, bytesUploaded, bytesTotal, percentage }`
+- `onSuccess`: `{ collectionSlug, file, uploadType, streamId }`
+- `onError`: `{ collectionSlug, file, uploadType, stage: 'generate-upload-url' | 'upload', error }`
 ```
 
 ### Video Options

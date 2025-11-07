@@ -1,23 +1,75 @@
 'use client'
 import { createClientUploadHandler } from '@payloadcms/plugin-cloud-storage/client'
 import * as tus from 'tus-js-client'
+import type { ClientUploadCallbacks, ClientUploadErrorStage, UploadType } from '../types'
 
 // 200MB 的字节大小
 const MAX_FILE_SIZE = 200 * 1024 * 1024
 
-export const CloudflareClientUploadHandler = createClientUploadHandler({
+type HandlerExtraProps = {
+  callbacks?: ClientUploadCallbacks
+}
+
+export const CloudflareClientUploadHandler = createClientUploadHandler<HandlerExtraProps>({
   handler: async ({
     apiRoute,
     collectionSlug,
     file,
+    extra,
     serverHandlerPath,
     serverURL,
     updateFilename,
   }) => {
-    try {
-      // 判断是否需要使用TUS进行分片上传
-      const useTus = file.size > MAX_FILE_SIZE
+    // 判断是否需要使用TUS进行分片上传
+    const useTus = file.size > MAX_FILE_SIZE
+    const uploadType: UploadType = useTus ? 'tus' : 'direct'
+    const callbacks = extra?.callbacks
+    let uploadSessionEstablished = false
+    let errorNotified = false
 
+    const emitError = (error: unknown, stage: ClientUploadErrorStage = 'upload') => {
+      errorNotified = true
+
+      if (!callbacks?.onError) {
+        return
+      }
+
+      const normalizedError = error instanceof Error ? error : new Error(String(error))
+      callbacks.onError({
+        collectionSlug,
+        error: normalizedError,
+        file,
+        stage,
+        uploadType,
+      })
+    }
+
+    const emitSuccess = (streamId: string) => {
+      callbacks?.onSuccess?.({
+        collectionSlug,
+        file,
+        streamId,
+        uploadType,
+      })
+    }
+
+    const emitProgress = (bytesUploaded: number, bytesTotal: number) => {
+      const normalizedTotal = bytesTotal || file.size || 1
+      const percentage = Number(((bytesUploaded / normalizedTotal) * 100).toFixed(2))
+
+      callbacks?.onProgress?.({
+        bytesUploaded,
+        bytesTotal: normalizedTotal,
+        collectionSlug,
+        file,
+        percentage,
+        uploadType,
+      })
+
+      return percentage
+    }
+
+    try {
       // 第一步：获取上传URL（根据文件大小决定上传方式）
       const response = await fetch(`${serverURL}${apiRoute}${serverHandlerPath}`, {
         method: 'POST',
@@ -39,6 +91,7 @@ export const CloudflareClientUploadHandler = createClientUploadHandler({
       }
 
       const responseData = await response.json()
+      uploadSessionEstablished = true
 
       console.log('responseData!!!', responseData)
 
@@ -66,11 +119,13 @@ export const CloudflareClientUploadHandler = createClientUploadHandler({
             // 错误处理
             onError: (error) => {
               console.error('Cloudflare Stream TUS上传失败:', error)
+              emitError(error)
               reject(error)
             },
             // 成功回调
             onSuccess: () => {
               console.log('Cloudflare Stream TUS上传成功')
+              emitSuccess(responseData.streamId)
 
               // 更新文件名（如果需要）
               if (updateFilename) {
@@ -85,9 +140,9 @@ export const CloudflareClientUploadHandler = createClientUploadHandler({
             },
             // 进度回调
             onProgress: (bytesUploaded, bytesTotal) => {
-              const percentage = ((bytesUploaded / bytesTotal) * 100).toFixed(2)
+              const percentage = emitProgress(bytesUploaded, bytesTotal)
               console.log(
-                `上传进度: ${percentage}%，已上传: ${formatBytes(bytesUploaded)}/${formatBytes(bytesTotal)}`,
+                `上传进度: ${percentage.toFixed(2)}%，已上传: ${formatBytes(bytesUploaded)}/${formatBytes(bytesTotal)}`,
               )
             },
           })
@@ -105,22 +160,28 @@ export const CloudflareClientUploadHandler = createClientUploadHandler({
           'MB',
         )
 
-        const formData = new FormData()
-        formData.append('file', file)
-
-        const uploadResponse = await fetch(responseData.uploadURL, {
-          method: 'POST',
-          body: formData,
-        })
-
-        if (!uploadResponse.ok) {
-          throw new Error(`上传视频失败: ${uploadResponse.status} ${uploadResponse.statusText}`)
+        try {
+          await uploadFileWithProgress({
+            file,
+            uploadURL: responseData.uploadURL,
+            onProgress: (uploaded, total) => {
+              const percentage = emitProgress(uploaded, total)
+              console.log(
+                `上传进度: ${percentage.toFixed(2)}%，已上传: ${formatBytes(uploaded)}/${formatBytes(total)}`,
+              )
+            },
+          })
+        } catch (error) {
+          emitError(error)
+          throw error
         }
 
         // 更新文件名（如果需要）
         if (updateFilename) {
           updateFilename(file.name)
         }
+
+        emitSuccess(responseData.streamId)
 
         // 返回视频信息
         return {
@@ -132,10 +193,52 @@ export const CloudflareClientUploadHandler = createClientUploadHandler({
       }
     } catch (error) {
       console.error('Cloudflare Stream客户端上传失败:', error)
+      if (!errorNotified) {
+        emitError(error, uploadSessionEstablished ? 'upload' : 'generate-upload-url')
+      }
       throw error
     }
   },
 })
+
+/**
+ * 使用 XMLHttpRequest 上传文件以便能够获取上传进度
+ */
+function uploadFileWithProgress({
+  file,
+  uploadURL,
+  onProgress,
+}: {
+  file: File
+  uploadURL: string
+  onProgress: (uploaded: number, total: number) => void
+}): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', uploadURL)
+
+    xhr.upload.onprogress = (event) => {
+      const total = event.lengthComputable ? event.total : file.size
+      onProgress(event.loaded, total || file.size)
+    }
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve()
+      } else {
+        reject(new Error(`上传视频失败: ${xhr.status} ${xhr.statusText}`))
+      }
+    }
+
+    xhr.onerror = () => {
+      reject(new Error('上传过程中发生网络错误'))
+    }
+
+    const formData = new FormData()
+    formData.append('file', file)
+    xhr.send(formData)
+  })
+}
 
 /**
  * 格式化字节大小为人类可读形式

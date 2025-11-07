@@ -1,4 +1,4 @@
-import type { CollectionConfig, PayloadRequest } from 'payload'
+import type { CollectionConfig, PayloadRequest, UploadCollectionSlug } from 'payload'
 import type {
   ClientUploadsAccess,
   ClientUploadsConfig,
@@ -12,6 +12,37 @@ export interface File {
   filesize: number
   mimeType: string
   tempFilePath?: string
+}
+
+export type UploadType = 'direct' | 'tus'
+
+export type ClientUploadErrorStage = 'generate-upload-url' | 'upload'
+
+interface ClientUploadBaseArgs {
+  collectionSlug: UploadCollectionSlug
+  file: globalThis.File
+  uploadType: UploadType
+}
+
+export interface ClientUploadProgressArgs extends ClientUploadBaseArgs {
+  bytesUploaded: number
+  bytesTotal: number
+  percentage: number
+}
+
+export interface ClientUploadSuccessArgs extends ClientUploadBaseArgs {
+  streamId: string
+}
+
+export interface ClientUploadErrorArgs extends ClientUploadBaseArgs {
+  error: Error
+  stage: ClientUploadErrorStage
+}
+
+export interface ClientUploadCallbacks {
+  onError?: (args: ClientUploadErrorArgs) => void
+  onSuccess?: (args: ClientUploadSuccessArgs) => void
+  onProgress?: (args: ClientUploadProgressArgs) => void
 }
 
 export interface CloudflareStreamPluginOptions {
