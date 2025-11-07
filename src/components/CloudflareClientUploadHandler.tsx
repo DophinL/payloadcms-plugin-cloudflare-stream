@@ -1,5 +1,6 @@
 'use client'
 import { createClientUploadHandler } from '@payloadcms/plugin-cloud-storage/client'
+import { toast } from '@payloadcms/ui'
 import * as tus from 'tus-js-client'
 import type { ClientUploadCallbacks, ClientUploadErrorStage, UploadType } from '../types'
 
@@ -24,24 +25,49 @@ export const CloudflareClientUploadHandler = createClientUploadHandler<HandlerEx
     const useTus = file.size > MAX_FILE_SIZE
     const uploadType: UploadType = useTus ? 'tus' : 'direct'
     const callbacks = extra?.callbacks
+    let toastId: string | number | undefined
     let uploadSessionEstablished = false
     let errorNotified = false
+
+    const describeUpload = () =>
+      `${file.name || '未命名视频'} · ${uploadType === 'tus' ? '分片上传' : '直传'}`
+
+    const showLoadingToast = (message: string, description?: string) => {
+      toastId = toast.loading(message, {
+        description: description ?? describeUpload(),
+        duration: Infinity,
+        id: toastId,
+      })
+    }
+
+    const showSuccessToast = (message: string, description?: string) => {
+      toastId = toast.success(message, {
+        description: description ?? describeUpload(),
+        id: toastId,
+      })
+      toastId = undefined
+    }
+
+    const showErrorToast = (message: string, description?: string) => {
+      toastId = toast.error(message, {
+        description,
+        id: toastId,
+      })
+      toastId = undefined
+    }
 
     const emitError = (error: unknown, stage: ClientUploadErrorStage = 'upload') => {
       errorNotified = true
 
-      if (!callbacks?.onError) {
-        return
-      }
-
       const normalizedError = error instanceof Error ? error : new Error(String(error))
-      callbacks.onError({
+      callbacks?.onError?.({
         collectionSlug,
         error: normalizedError,
         file,
         stage,
         uploadType,
       })
+      showErrorToast('上传失败', normalizedError.message)
     }
 
     const emitSuccess = (streamId: string) => {
@@ -51,6 +77,7 @@ export const CloudflareClientUploadHandler = createClientUploadHandler<HandlerEx
         streamId,
         uploadType,
       })
+      showSuccessToast('上传完成')
     }
 
     const emitProgress = (bytesUploaded: number, bytesTotal: number) => {
@@ -66,10 +93,13 @@ export const CloudflareClientUploadHandler = createClientUploadHandler<HandlerEx
         uploadType,
       })
 
+      showLoadingToast('正在上传视频', `${describeUpload()} · ${percentage.toFixed(2)}%`)
+
       return percentage
     }
 
     try {
+      showLoadingToast('正在准备上传')
       // 第一步：获取上传URL（根据文件大小决定上传方式）
       const response = await fetch(`${serverURL}${apiRoute}${serverHandlerPath}`, {
         method: 'POST',
