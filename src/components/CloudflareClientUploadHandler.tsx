@@ -101,6 +101,15 @@ export const CloudflareClientUploadHandler = createClientUploadHandler<HandlerEx
     }
 
     try {
+      // 验证文件类型（确保是视频文件）
+      if (!file.type.startsWith('video/')) {
+        emitError(
+          new Error(`不支持的文件类型: ${file.type}。请上传视频文件。`),
+          'generate-upload-url',
+        )
+        throw new Error(`不支持的文件类型: ${file.type}`)
+      }
+
       showLoadingToast('正在准备上传')
       // 第一步：获取上传URL（根据文件大小决定上传方式）
       const response = await fetch(`${serverURL}${apiRoute}${serverHandlerPath}`, {

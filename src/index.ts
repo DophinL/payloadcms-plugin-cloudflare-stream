@@ -747,7 +747,8 @@ export const cloudflareStreamPlugin = (pluginOptions: CloudflareStreamPluginConf
           upload: {
             ...(typeof collection.upload === 'object' ? collection.upload : {}),
             disableLocalStorage,
-            mimeTypes: ['video/*'],
+            // 不设置 mimeTypes，因为客户端上传时会导致验证错误
+            // 客户端会在上传前验证文件类型
           },
           hooks: {
             ...(collection.hooks || {}),
