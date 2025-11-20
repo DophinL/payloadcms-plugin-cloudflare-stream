@@ -131,9 +131,9 @@ function extractStreamIdFromTusUrl(tusUrl: string): string {
 function buildUploadMetadata(filename: string, mimeType: string, videoOptions: any): string {
   const metadata = []
 
-  // 添加文件名和类型
+  // 添加文件名 - Cloudflare 使用 'name' 字段而不是 'filename'
   if (filename) {
-    metadata.push(`filename ${Buffer.from(filename).toString('base64')}`)
+    metadata.push(`name ${Buffer.from(filename).toString('base64')}`)
   }
 
   if (mimeType) {
@@ -150,6 +150,13 @@ function buildUploadMetadata(filename: string, mimeType: string, videoOptions: a
   // 添加其他可能的元数据
   if (videoOptions.requireSignedURLs) {
     metadata.push('requiresignedurls')
+  }
+
+  // 添加 allowDownload 选项
+  if (videoOptions.allowDownload !== undefined) {
+    metadata.push(
+      `allowDownload ${Buffer.from(String(videoOptions.allowDownload)).toString('base64')}`,
+    )
   }
 
   return metadata.join(',')

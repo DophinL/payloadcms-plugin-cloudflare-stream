@@ -188,9 +188,11 @@ export const checkVideoStatus = async ({
 export const genAndGetDownloadUrl = async ({
   streamId,
   options,
+  waitUntilReady = true,
 }: {
   streamId: string
   options: CloudflareStreamPluginOptions
+  waitUntilReady?: boolean
 }): Promise<string> => {
   const { debug = false } = options
 
@@ -203,6 +205,32 @@ export const genAndGetDownloadUrl = async ({
   }
 
   try {
+    // 如果不需要等待，直接尝试快速获取现有的下载链接
+    if (!waitUntilReady) {
+      try {
+        const getResponse = await fetch(`${API_BASE}/${accountId}/stream/${streamId}/downloads`, {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${apiToken}`,
+            'Content-Type': 'application/json',
+          },
+        })
+
+        if (getResponse.ok) {
+          const getResult = await getResponse.json()
+          if (getResult.success && getResult.result.default?.status === 'ready') {
+            return getResult.result.default.url
+          }
+        }
+      } catch {
+        if (debug) {
+          console.log('视频下载链接暂未就绪，将在后续轮询中更新')
+        }
+      }
+      // 如果还没有下载链接，返回空字符串，等待后续的 afterChange hook 更新
+      return ''
+    }
+
     // 先检查视频状态，waitUntilReady 设为 true 表示等待视频处理完成
     const videoStatus = await checkVideoStatus({ streamId, options, waitUntilReady: true })
 

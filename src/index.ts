@@ -290,9 +290,19 @@ function cloudflareStreamAdapter(getOptions: () => CloudflareStreamPluginOptions
                 ? 'error'
                 : 'processing'
 
+          // 从 Cloudflare 元数据中提取文件名（如果存在）
+          const meta = videoData.meta || {}
+          if (meta.name && !data.filename) {
+            data.filename = meta.name
+            if (debug) {
+              console.log('从 Cloudflare 元数据中获取文件名:', meta.name)
+            }
+          }
+
           const videoUrl = await genAndGetDownloadUrl({
             streamId,
             options,
+            waitUntilReady: false, // 不等待视频处理完成，避免阻塞 handleUpload
           })
 
           // 更新 data.cloudflareStream 字段
@@ -626,6 +636,22 @@ export const cloudflareStreamPlugin = (pluginOptions: CloudflareStreamPluginConf
                   console.log(`视频状态已更新为 ${result.status}: ${streamId}`)
                 }
 
+                // 获取下载链接（如果视频已就绪）
+                let downloadUrl = doc.cloudflareStream.downloadUrl || ''
+                if (result.status === 'ready') {
+                  try {
+                    downloadUrl = await genAndGetDownloadUrl({
+                      streamId,
+                      options,
+                      waitUntilReady: true, // 视频已就绪，可以等待下载链接
+                    })
+                  } catch (error) {
+                    if (options.debug) {
+                      console.error('获取下载链接失败:', error)
+                    }
+                  }
+                }
+
                 await req.payload.update({
                   collection: collectionSlug,
                   id: doc.id,
@@ -636,6 +662,7 @@ export const cloudflareStreamPlugin = (pluginOptions: CloudflareStreamPluginConf
                       duration: result.duration,
                       thumbnailUrl: result.thumbnailUrl,
                       size: result.size,
+                      downloadUrl: downloadUrl,
                     },
                   },
                 })
