@@ -39,6 +39,120 @@ interface CloudflareStreamClientUploadContext {
   [key: string]: any
 }
 
+interface CloudflareApiResponse {
+  success?: boolean
+  errors?: Array<{ message?: string }>
+  result?: {
+    uploadURL?: string
+    uid?: string
+  }
+}
+
+function toCloudflareErrorMessage(payload: CloudflareApiResponse | null): string {
+  if (!payload) return 'Unknown Cloudflare API error'
+  if (payload.errors?.length) {
+    return payload.errors.map((error) => error.message || 'Unknown error').join(', ')
+  }
+  return 'Unknown Cloudflare API error'
+}
+
+function bufferToArrayBuffer(buffer: Buffer): ArrayBuffer {
+  return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer
+}
+
+async function ensureStreamIdForServerUpload({
+  data,
+  file,
+  options,
+  clientUploadContext,
+}: {
+  data: Record<string, any>
+  file: CloudStorageFile
+  options: CloudflareStreamPluginOptions
+  clientUploadContext?: unknown
+}): Promise<string | undefined> {
+  const contextStreamId = (clientUploadContext as CloudflareStreamClientUploadContext | undefined)
+    ?.streamId
+
+  if (contextStreamId) {
+    return contextStreamId
+  }
+
+  const { accountId, apiToken, debug } = options
+
+  if (!file?.buffer) {
+    if (debug) {
+      console.warn('客户端上传上下文中缺少 streamId，且当前 file 无 buffer，无法执行服务端兜底上传')
+    }
+    return undefined
+  }
+
+  if (debug) {
+    console.log('未提供 streamId，开始执行服务端兜底上传到 Cloudflare Stream')
+  }
+
+  let createPayload: CloudflareApiResponse | null = null
+  const createResponse = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/direct_upload`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        maxDurationSeconds: options.videoOptions?.maxDurationSeconds || 3600,
+      }),
+    },
+  )
+
+  const createText = await createResponse.text()
+  try {
+    createPayload = createText ? (JSON.parse(createText) as CloudflareApiResponse) : null
+  } catch {
+    createPayload = null
+  }
+
+  if (!createResponse.ok || !createPayload?.success || !createPayload.result?.uploadURL || !createPayload.result?.uid) {
+    throw new Error(
+      `Failed to create Stream upload URL: ${createResponse.status} ${createResponse.statusText}; ${toCloudflareErrorMessage(createPayload)}`,
+    )
+  }
+
+  const streamId = createPayload.result.uid
+  const uploadUrl = createPayload.result.uploadURL
+
+  const formData = new FormData()
+  const buffer = file.buffer as Buffer
+  const blob = new Blob([bufferToArrayBuffer(buffer)], {
+    type: file.mimeType || 'video/mp4',
+  })
+  const filename = file.filename || data?.filename || 'upload.mp4'
+  formData.append('file', blob, filename)
+
+  const uploadResponse = await fetch(uploadUrl, {
+    method: 'POST',
+    body: formData,
+  })
+
+  if (!uploadResponse.ok) {
+    const uploadText = await uploadResponse.text().catch(() => '')
+    throw new Error(
+      `Failed to upload video to Stream: ${uploadResponse.status} ${uploadResponse.statusText}${uploadText ? `; ${uploadText.slice(0, 500)}` : ''}`,
+    )
+  }
+
+  if (debug) {
+    console.log('服务端兜底上传完成', {
+      streamId,
+      filename,
+      filesize: buffer.length,
+    })
+  }
+
+  return streamId
+}
+
 // 扩展 FileData 接口以包含 cloudflareStream 字段
 interface CloudflareStreamFileData extends FileData {
   cloudflareStream?: {
@@ -243,24 +357,30 @@ function cloudflareStreamAdapter(getOptions: () => CloudflareStreamPluginOptions
 
       // 处理上传
       handleUpload: (async ({ data, file, clientUploadContext }) => {
-        debugger
         console.log('handleUpload', data, file, clientUploadContext)
         const options = getOptions()
         const { accountId, apiToken, debug } = options
 
-        if (
-          !clientUploadContext ||
-          !(clientUploadContext as CloudflareStreamClientUploadContext).streamId
-        ) {
-          if (debug) {
-            console.warn('客户端上传上下文中缺少 streamId')
-          }
+        let streamId: string | undefined
+
+        try {
+          streamId = await ensureStreamIdForServerUpload({
+            data: data as Record<string, any>,
+            file,
+            options,
+            clientUploadContext,
+          })
+        } catch (error) {
+          console.error('服务端兜底上传失败:', error)
+          return data
+        }
+
+        if (!streamId) {
           return data
         }
 
         try {
           // 请求 Cloudflare Stream API 获取视频详细信息
-          const streamId = (clientUploadContext as CloudflareStreamClientUploadContext).streamId
           const response = await fetch(
             `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/${streamId}`,
             {
@@ -338,8 +458,8 @@ function cloudflareStreamAdapter(getOptions: () => CloudflareStreamPluginOptions
 
           // 设置默认的处理中状态
           data.cloudflareStream = {
-            streamId: (clientUploadContext as CloudflareStreamClientUploadContext).streamId,
-            streamUrl: `${options.streamDomain}/${(clientUploadContext as CloudflareStreamClientUploadContext).streamId}/watch`,
+            streamId,
+            streamUrl: `${options.streamDomain}/${streamId}/watch`,
             status: 'processing',
             uploadedAt: new Date(),
           }
