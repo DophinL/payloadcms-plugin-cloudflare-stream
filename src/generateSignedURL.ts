@@ -148,13 +148,31 @@ function normalizeAllowedOrigins(value: unknown): string[] | undefined {
   const result: string[] = []
 
   for (const origin of value) {
-    const normalized = String(origin || '').trim()
+    const normalized = sanitizeAllowedOrigin(String(origin || ''))
     if (!normalized || seen.has(normalized)) continue
     seen.add(normalized)
     result.push(normalized)
   }
 
   return result.length > 0 ? result : undefined
+}
+
+function sanitizeAllowedOrigin(value: string): string | null {
+  const raw = value.trim()
+  if (!raw) return null
+
+  if (/^https?:\/\//i.test(raw)) {
+    try {
+      const parsed = new URL(raw)
+      return parsed.host.trim().toLowerCase() || null
+    } catch {
+      return null
+    }
+  }
+
+  const withoutPath = raw.split('/')[0]?.trim()
+  if (!withoutPath) return null
+  return withoutPath.toLowerCase()
 }
 
 async function setAllowedOriginsForStream({

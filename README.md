@@ -186,7 +186,7 @@ cloudflareStreamPlugin({
     requireSignedURLs: false, // Whether videos require signed URLs
     maxDurationSeconds: 3600, // Max video duration (1 hour)
     allowDownload: true, // Allow users to download videos
-    allowedOrigins: ['https://youmind.com', 'https://*.youmind.com'],
+    allowedOrigins: ['youmind.com', '*.youmind.com'],
     watermark: {
       // Watermark configuration
       uid: 'your-watermark-id',

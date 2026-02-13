@@ -1,6 +1,6 @@
 {
   "name": "payloadcms-plugin-cloudflare-stream",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "A Cloudflare Stream plugin for PayloadCMS with client upload support",
   "license": "MIT",
   "type": "module",

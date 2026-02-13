@@ -54,7 +54,7 @@ export default buildConfig({
         allowDownload: false,
         requireSignedURLs: false,
         maxDurationSeconds: 3600, // 最大1小时
-        allowedOrigins: ['https://youmind.com', 'https://*.youmind.com'],
+        allowedOrigins: ['youmind.com', '*.youmind.com'],
       },
       
       // 视频上传后的回调（可选）

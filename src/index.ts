@@ -63,13 +63,31 @@ function normalizeAllowedOrigins(origins: unknown): string[] | undefined {
   const normalized: string[] = []
 
   for (const origin of origins) {
-    const value = String(origin || '').trim()
+    const value = sanitizeAllowedOrigin(String(origin || ''))
     if (!value || seen.has(value)) continue
     seen.add(value)
     normalized.push(value)
   }
 
   return normalized.length > 0 ? normalized : undefined
+}
+
+function sanitizeAllowedOrigin(value: string): string | null {
+  const raw = value.trim()
+  if (!raw) return null
+
+  if (/^https?:\/\//i.test(raw)) {
+    try {
+      const parsed = new URL(raw)
+      return parsed.host.trim().toLowerCase() || null
+    } catch {
+      return null
+    }
+  }
+
+  const withoutPath = raw.split('/')[0]?.trim()
+  if (!withoutPath) return null
+  return withoutPath.toLowerCase()
 }
 
 function bufferToArrayBuffer(buffer: Buffer): ArrayBuffer {
