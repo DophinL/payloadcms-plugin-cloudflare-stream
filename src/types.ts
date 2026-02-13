@@ -138,6 +138,12 @@ export interface CloudflareStreamPluginOptions {
     maxDurationSeconds?: number
 
     /**
+     * 允许播放视频的来源域名（支持通配符子域）
+     * 例如: ['https://youmind.com', 'https://*.youmind.com']
+     */
+    allowedOrigins?: string[]
+
+    /**
      * 水印设置
      */
     watermark?: {

@@ -56,6 +56,22 @@ function toCloudflareErrorMessage(payload: CloudflareApiResponse | null): string
   return 'Unknown Cloudflare API error'
 }
 
+function normalizeAllowedOrigins(origins: unknown): string[] | undefined {
+  if (!Array.isArray(origins)) return undefined
+
+  const seen = new Set<string>()
+  const normalized: string[] = []
+
+  for (const origin of origins) {
+    const value = String(origin || '').trim()
+    if (!value || seen.has(value)) continue
+    seen.add(value)
+    normalized.push(value)
+  }
+
+  return normalized.length > 0 ? normalized : undefined
+}
+
 function bufferToArrayBuffer(buffer: Buffer): ArrayBuffer {
   return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer
 }
@@ -79,6 +95,7 @@ async function ensureStreamIdForServerUpload({
   }
 
   const { accountId, apiToken, debug } = options
+  const allowedOrigins = normalizeAllowedOrigins(options.videoOptions?.allowedOrigins)
 
   if (!file?.buffer) {
     if (debug) {
@@ -102,6 +119,7 @@ async function ensureStreamIdForServerUpload({
       },
       body: JSON.stringify({
         maxDurationSeconds: options.videoOptions?.maxDurationSeconds || 3600,
+        allowedOrigins,
       }),
     },
   )

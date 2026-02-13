@@ -35,6 +35,8 @@ export const getGenerateSignedURLHandler = ({
     }
 
     try {
+      const allowedOrigins = normalizeAllowedOrigins(videoOptions.allowedOrigins)
+
       // 判断文件是基础上传还是需要TUS分片上传
       const isTusUpload = req.headers.get('X-Use-Tus') === 'true'
 
@@ -68,6 +70,19 @@ export const getGenerateSignedURLHandler = ({
 
         // 从URL中提取streamId
         const streamId = extractStreamIdFromTusUrl(tusUploadURL)
+        if (!streamId) {
+          throw new APIError('Failed to parse streamId from TUS upload URL')
+        }
+
+        // TUS 分片上传时，创建 stream 后补写 allowedOrigins
+        if (allowedOrigins && allowedOrigins.length > 0) {
+          await setAllowedOriginsForStream({
+            accountId,
+            apiToken,
+            streamId,
+            allowedOrigins,
+          })
+        }
 
         return Response.json({
           tusEndpoint: tusUploadURL,
@@ -85,6 +100,7 @@ export const getGenerateSignedURLHandler = ({
             },
             body: JSON.stringify({
               maxDurationSeconds: videoOptions.maxDurationSeconds || 3600, // 默认一小时
+              allowedOrigins,
             }),
           },
         )
@@ -123,6 +139,59 @@ function extractStreamIdFromTusUrl(tusUrl: string): string {
   // Cloudflare TUS URL 格式: https://upload.cloudflarestream.com/tus/{streamId}?tusv2=true
   const matches = tusUrl.match(/\/tus\/([a-f0-9]{32})(?:\?|$)/)
   return matches ? matches[1] : ''
+}
+
+function normalizeAllowedOrigins(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+
+  const seen = new Set<string>()
+  const result: string[] = []
+
+  for (const origin of value) {
+    const normalized = String(origin || '').trim()
+    if (!normalized || seen.has(normalized)) continue
+    seen.add(normalized)
+    result.push(normalized)
+  }
+
+  return result.length > 0 ? result : undefined
+}
+
+async function setAllowedOriginsForStream({
+  accountId,
+  apiToken,
+  streamId,
+  allowedOrigins,
+}: {
+  accountId: string
+  apiToken: string
+  streamId: string
+  allowedOrigins: string[]
+}) {
+  const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/${streamId}`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ allowedOrigins }),
+  })
+
+  const text = await response.text()
+  let payload: { success?: boolean; errors?: Array<{ message?: string }> } | null = null
+
+  try {
+    payload = text ? (JSON.parse(text) as { success?: boolean; errors?: Array<{ message?: string }> }) : null
+  } catch {
+    payload = null
+  }
+
+  if (!response.ok || !payload?.success) {
+    const details = payload?.errors?.map((item) => item.message || 'unknown').join(', ') || text
+    throw new APIError(
+      `Failed to set allowedOrigins for stream ${streamId}: ${response.status} ${response.statusText}${details ? `; ${details}` : ''}`,
+    )
+  }
 }
 
 /**
